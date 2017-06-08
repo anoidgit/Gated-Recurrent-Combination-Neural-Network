@@ -18,14 +18,14 @@ torch.setdefaulttensortype('torch.FloatTensor')
 
 logger:log("load learning rate manager")
 require "utils.lrSheduler"
-local lrKeeper = lrSheduler(modlr, expdecaycycle, lrdecaycycle, earlystop, csave, csave, true, csave, "modrs/"..runid.."/nnmod", "modrs/"..runid.."/devnnmod", "modrs/"..runid.."/dnnmod", ".asc", nil, logger, true, "modrs/"..runid.."/crit.asc", "modrs/"..runid.."/critdev.asc")
+local lrKeeper = lrSheduler(modlr, nil, expdecaycycle, lrdecaycycle, earlystop, csave, csave, true, false, "modrs/"..runid.."/nnmod", "modrs/"..runid.."/devnnmod", "modrs/"..runid.."/dnnmod", ".asc", nil, logger, true, "modrs/"..runid.."/crit.asc", "modrs/"..runid.."/critdev.asc")
 
 logger:log("load data")
 local traind, devd = unpack(require "dloader")
 
-local function train(trainset, devset, memlimit, lrKeeper)
+local function train(trainset, devset, memlimit, lrKeeper, parupdate)
 
-	local function _train(trainset, devset, memlimit, lrKeeper)
+	local function _train(trainset, devset, memlimit, lrKeeper, parupdate)
 
 		logger:log("pre load package")
 		require "nn"
@@ -57,15 +57,19 @@ local function train(trainset, devset, memlimit, lrKeeper)
 
 				local pred=mlpin:forward(x)
 				_inner_err=criterionin:forward(pred, y)
-				local gradCriterion=criterionin:backward(pred, y)
-				sumErr=sumErr+_inner_err
-				pred=nil
-				mlpin:backward(x, gradCriterion)
+				if _inner_err~=0 then
+					local gradCriterion=criterionin:backward(pred, y)
+					sumErr=sumErr+_inner_err
+					pred=nil
+					mlpin:backward(x, gradCriterion)
 
-				--mlpin:maxParamNorm(2)
+					--mlpin:maxParamNorm(2)
 
-				checkgpu(limit)
-				optm(feval, _inner_params, {learningRate = lr})
+					if limit then
+						checkgpu(limit)
+					end
+					optm(feval, _inner_params, {learningRate = lr})
+				end
 
 			end
 
@@ -87,7 +91,7 @@ local function train(trainset, devset, memlimit, lrKeeper)
 			return rs
 		end
 
-		--[[local function evaDev(mlpin, criterionin, devdata)
+		local function evaDev(mlpin, criterionin, devdata)
 			mlpin:evaluate()
 			local serr=0
 			xlua.progress(0, ndev)
@@ -97,21 +101,6 @@ local function train(trainset, devset, memlimit, lrKeeper)
 			end
 			mlpin:training()
 			return serr/ndev
-		end]]
-		local function evaDev(mlpin, criterionin, devdata)
-			mlpin:evaluate()
-			local sc=0
-			local sum=0
-			xlua.progress(0, ndev)
-			for i, id, td in devdata:subiter() do
-				local pred=mlpin:forward(id)
-				local y,ind=torch.max(pred, 2)
-				sum=sum+td:size(1)
-				sc=sc+ind:eq(td):sum()
-				xlua.progress(i, ndev)
-			end
-			mlpin:training()
-			return 1-sc/sum
 		end
 
 		local erate, edevrate
@@ -153,7 +142,15 @@ local function train(trainset, devset, memlimit, lrKeeper)
 		lrKeeper:feed(nil, edevrate, true)
 		logger:log("Init model Dev:"..edevrate)
 
-		local eaddtrain=ntrain*ieps
+		local eaddtrain
+		if parupdate then
+			eaddtrain=ntrain%parupdate
+			if eaddtrain==0 then
+				eaddtrain=parupdate
+			end
+		else
+			eaddtrain=ntrain*ieps
+		end
 
 		collectgarbage()
 
@@ -164,12 +161,24 @@ local function train(trainset, devset, memlimit, lrKeeper)
 				for i, id, td in trainset:subiter() do
 					gradUpdate(nnmod, id, td, critmod, lr, optmethod, memlimit)
 					xlua.progress(i, ntrain)
+					if parupdate and (i%parupdate==0) then
+						erate=sumErr/parupdate
+						lr=lrKeeper:feed(erate, nil, true)
+						sumErr=0
+					end
+				end
+				if parupdate then
+					erate=sumErr/eaddtrain
+					lr=lrKeeper:feed(erate, nil, true)
+					sumErr=0
 				end
 			end
-			erate=sumErr/eaddtrain
-			lrKeeper:feed(erate, nil, true)
-			logger:log("epoch:"..tostring(epochs)..",lr:"..lr..",Tra:"..erate)
-			sumErr=0
+			if not parupdate then
+				erate=sumErr/eaddtrain
+				lrKeeper:feed(erate, nil, true)
+				logger:log("epoch:"..tostring(epochs)..",lr:"..lr..",Tra:"..erate)
+				sumErr=0
+			end
 			epochs=epochs+1
 		end
 
@@ -193,6 +202,16 @@ local function train(trainset, devset, memlimit, lrKeeper)
 					for i, id, td in trainset:subiter() do
 						gradUpdate(nnmod, id, td, critmod, lr, optmethod, memlimit)
 						xlua.progress(i, ntrain)
+						if parupdate and (i%parupdate==0) then
+							erate=sumErr/parupdate
+							lr=lrKeeper:feed(erate, nil, nil, true)
+							sumErr=0
+						end
+					end
+					if parupdate and (tmpi<ieps) then
+						erate=sumErr/eaddtrain
+						lr=lrKeeper:feed(erate, nil, nil, true)
+						sumErr=0
 					end
 				end
 				erate=sumErr/eaddtrain
@@ -225,7 +244,7 @@ local function train(trainset, devset, memlimit, lrKeeper)
 	end
 
 	local _, err = pcall(function ()
-		_train(trainset, devset, memlimit, lrKeeper)
+		_train(trainset, devset, memlimit, lrKeeper, parupdate)
 		end
 	)
 	if err then
@@ -233,6 +252,6 @@ local function train(trainset, devset, memlimit, lrKeeper)
 	end
 end
 
-train(traind, devd, recyclemem or 0.05, lrKeeper)
+train(traind, devd, recyclemem, lrKeeper, partupdate)
 
 logger:shutDown()
