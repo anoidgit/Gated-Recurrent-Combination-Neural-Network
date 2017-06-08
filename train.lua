@@ -91,7 +91,7 @@ local function train(trainset, devset, memlimit, lrKeeper, parupdate)
 			return rs
 		end
 
-		local function evaDev(mlpin, criterionin, devdata)
+		--[[local function evaDev(mlpin, criterionin, devdata)
 			mlpin:evaluate()
 			local serr=0
 			xlua.progress(0, ndev)
@@ -101,6 +101,21 @@ local function train(trainset, devset, memlimit, lrKeeper, parupdate)
 			end
 			mlpin:training()
 			return serr/ndev
+		end]]
+		local function evaDev(mlpin, criterionin, devdata)
+			mlpin:evaluate()
+			local sc=0
+			local sum=0
+			xlua.progress(0, ndev)
+			for i, id, td in devdata:subiter() do
+				local pred=mlpin:forward(id)
+				local y,ind=torch.max(pred, 2)
+				sum=sum+td:size(1)
+				sc=sc+ind:eq(td):sum()
+				xlua.progress(i, ndev)
+			end
+			mlpin:training()
+			return 1-sc/sum
 		end
 
 		local erate, edevrate
