@@ -159,10 +159,7 @@ local function train(trainset, devset, memlimit, lrKeeper, parupdate, psilent)
 
 		local eaddtrain
 		if parupdate then
-			eaddtrain=ntrain%parupdate
-			if eaddtrain==0 then
-				eaddtrain=parupdate
-			end
+			eaddtrain=(ntrain-1)%parupdate+1
 		else
 			eaddtrain=ntrain*ieps
 		end
