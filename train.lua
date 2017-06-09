@@ -166,35 +166,35 @@ local function train(trainset, devset, memlimit, lrKeeper, parupdate, psilent)
 
 		collectgarbage()
 
-		logger:log("start pre train")
-		for tmpi=1,warmcycle do
-			for tmpj=1,ieps do
-				xlua.progress(0, ntrain)
-				for i, id, td in trainset:subiter() do
-					gradUpdate(nnmod, id, td, critmod, lr, optmethod, memlimit)
-					xlua.progress(i, ntrain)
-					if parupdate and (i%parupdate==0) then
-						erate=sumErr/parupdate
+		if warmcycle>0 then
+			logger:log("start pre train")
+			for tmpi=1,warmcycle do
+				for tmpj=1,ieps do
+					xlua.progress(0, ntrain)
+					for i, id, td in trainset:subiter() do
+						gradUpdate(nnmod, id, td, critmod, lr, optmethod, memlimit)
+						xlua.progress(i, ntrain)
+						if parupdate and (i%parupdate==0) and (i~=ntrain) then
+							erate=sumErr/parupdate
+							lr=lrKeeper:feed(erate, nil, true)
+							sumErr=0
+						end
+					end
+					if parupdate then
+						erate=sumErr/eaddtrain
 						lr=lrKeeper:feed(erate, nil, true)
 						sumErr=0
 					end
 				end
-				if parupdate then
+				if not parupdate then
 					erate=sumErr/eaddtrain
-					lr=lrKeeper:feed(erate, nil, true)
+					lrKeeper:feed(erate, nil, true)
+					logger:log("epoch:"..tostring(epochs)..",lr:"..lr..",Tra:"..erate)
 					sumErr=0
 				end
+				epochs=epochs+1
 			end
-			if not parupdate then
-				erate=sumErr/eaddtrain
-				lrKeeper:feed(erate, nil, true)
-				logger:log("epoch:"..tostring(epochs)..",lr:"..lr..",Tra:"..erate)
-				sumErr=0
-			end
-			epochs=epochs+1
-		end
 
-		if warmcycle>0 then
 			logger:log("save neural network trained")
 			lrKeeper:saveModel(savedir.."nnmod.asc")
 		end
@@ -214,14 +214,20 @@ local function train(trainset, devset, memlimit, lrKeeper, parupdate, psilent)
 					for i, id, td in trainset:subiter() do
 						gradUpdate(nnmod, id, td, critmod, lr, optmethod, memlimit)
 						xlua.progress(i, ntrain)
-						if parupdate and (i%parupdate==0) then
+						if parupdate and (i%parupdate==0) and (i~=ntrain) then
 							erate=sumErr/parupdate
+							if not psilent then
+								logger:log(erate)
+							end
 							lr=lrKeeper:feed(erate, nil, nil, psilent)
 							sumErr=0
 						end
 					end
 					if parupdate and (tmpi<ieps) then
 						erate=sumErr/eaddtrain
+						if not psilent then
+							logger:log(erate)
+						end
 						lr=lrKeeper:feed(erate, nil, nil, psilent)
 						sumErr=0
 					end
